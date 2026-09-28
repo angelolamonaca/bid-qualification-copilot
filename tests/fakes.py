@@ -1,4 +1,9 @@
-"""A deterministic stand-in for the model: no network, no cost, and it records every prompt."""
+"""A deterministic stand-in for the model: no network, no cost, and it records every prompt.
+
+It has the same two methods as the real client (embed and parse), so the app accepts it wherever
+it expects an `LLM`. Tests stay fast, free and repeatable, and can inspect exactly what would have
+been sent to the model.
+"""
 
 import hashlib
 import re
@@ -13,22 +18,30 @@ NO_COST = LLMUsage(model="fake", input_tokens=0, output_tokens=0, latency_ms=0, 
 
 
 def bag_of_words(text: str, dims: int = 512) -> list[float]:
-    """Hash each word into one of `dims` buckets: similar words -> similar vectors."""
-    vector = [0.0] * dims
+    """A fake embedding: each word is hashed into one of `dims` slots and counted.
+
+    Texts sharing words get similar vectors. That's enough to test access rules without calling
+    the real embedding model.
+    """
+    vector = [0.0] * dims  # a list of 512 zeros
     for token in tokenize(text):
         vector[int(hashlib.md5(token.encode()).hexdigest(), 16) % dims] += 1.0
-    vector[0] += 1e-6  # never all zeros
+    vector[0] += 1e-6  # never all zeros (a zero vector can't be normalized)
     return vector
 
 
 def cite_everything(messages: list[dict], schema: type[BaseModel]) -> BaseModel:
-    """Default reply: cite every source id that appears in the prompt."""
-    ids = re.findall(r'<source id="([^"]+)"', messages[-1]["content"])
+    """Default fake reply: cite every source id that appears in the prompt."""
+    ids = re.findall(r'<source id="([^"]+)"', messages[-1]["content"])  # messages[-1] = last one
     return ModelAnswer(answer="fake answer", citations=ids, limitations=[])
 
 
+Responder = Callable[[list[dict], type[BaseModel]], BaseModel]  # (messages, schema) -> reply
+
+
 class FakeLLM:
-    def __init__(self, respond: Callable[[list[dict], type[BaseModel]], BaseModel] = cite_everything):
+    # `respond` is a function the test can swap in to script the "model's" reply.
+    def __init__(self, respond: Responder = cite_everything):
         self.respond = respond
         self.prompts: list[str] = []  # everything ever sent to the "model", for leak checks
 
@@ -36,5 +49,5 @@ class FakeLLM:
         return [bag_of_words(t) for t in texts], NO_COST
 
     def parse(self, messages: list[dict], schema: type[BaseModel]) -> tuple[BaseModel, LLMUsage]:
-        self.prompts.append("\n".join(m["content"] for m in messages))
+        self.prompts.append("\n".join(m["content"] for m in messages))  # record the full prompt
         return self.respond(messages, schema), NO_COST

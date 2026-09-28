@@ -1,6 +1,7 @@
 """Step 1 smoke test: call the chat model and the embedding model on Azure without any API key.
 
-Run:  uv run --python 3.12 --with openai --with azure-identity scripts/smoke_test.py <ai-resource-name>
+Run:
+    uv run --python 3.12 --with openai --with azure-identity scripts/smoke_test.py <resource-name>
 """
 
 import sys
@@ -36,4 +37,5 @@ print(f"  tokens: {chat.usage.prompt_tokens} in / {chat.usage.completion_tokens}
 start = time.perf_counter()
 emb = client.embeddings.create(model="text-embedding-3-small", input=["bridge inspection services"])
 vector = emb.data[0].embedding
-print(f"embedding ({time.perf_counter() - start:.1f}s): {len(vector)} numbers, first three {vector[:3]}")
+elapsed = time.perf_counter() - start
+print(f"embedding ({elapsed:.1f}s): {len(vector)} numbers, first three {vector[:3]}")

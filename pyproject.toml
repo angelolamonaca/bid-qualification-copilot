@@ -1,3 +1,5 @@
+# The project definition (like package.json). `uv sync` installs everything listed here and
+# records the exact versions in uv.lock (like package-lock.json).
 [project]
 name = "bid-copilot"
 version = "0.1.0"
@@ -5,24 +7,25 @@ description = "Bid Qualification Copilot: permission-aware retrieval, bounded to
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-    "pydantic>=2.8",
-    "pydantic-settings>=2.4",
-    "openai>=3.0",
-    "azure-identity>=1.19",
-    "azure-data-tables>=12.6",
-    "httpx>=0.27",
-    "numpy>=2.0",
-    "pyyaml>=6.0",
+    "fastapi>=0.115",          # web framework (routes, validation, /docs page)
+    "uvicorn[standard]>=0.30", # the web server that runs the FastAPI app
+    "pydantic>=2.8",           # typed data models with runtime validation
+    "pydantic-settings>=2.4",  # configuration from environment variables
+    "openai>=3.0",             # client for Azure OpenAI's v1 endpoint
+    "azure-identity>=1.19",    # keyless sign-in: az login locally, managed identity in Azure
+    "azure-data-tables>=12.6", # Azure Table Storage client (workflow state)
+    "httpx>=0.27",             # HTTP client (calls to the CRM)
+    "numpy>=2.0",              # fast vector math for the embedding search
+    "pyyaml>=6.0",             # reads the documents' metadata and the personas file
 ]
 
+# Tools only needed while developing (like devDependencies).
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["."]  # lets tests `import app...` from the project root
 
-[tool.ruff]
+[tool.ruff]  # linter and formatter settings
 line-length = 100

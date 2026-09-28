@@ -16,13 +16,14 @@ def test_restricted_text_never_reaches_the_model():
     llm = FakeLLM()
     index = SearchIndex(load_chunks(), llm)
     answer_question("What harbor quay wall inspections did we do?", PERSONAS["mia"], index, llm)
-    assert llm.prompts, "the model should have been called"
+    assert llm.prompts, "the model should have been called"  # an empty list counts as False
     # Canaries that exist only inside the confidential document, never in the question.
     for canary in ("BLUE HERON", "PRJ-2025-044", "chloride"):
         assert all(canary not in prompt for prompt in llm.prompts), canary
 
 
 def test_citations_the_model_was_not_shown_are_dropped():
+    # A scripted "model" that misbehaves: it cites a confidential chunk Mia was never shown.
     def cite_a_confidential_chunk(messages, schema):
         return ModelAnswer(answer="We did a harbor job.", citations=["PRJ-2025-044@v1#1"],
                            limitations=[])
@@ -30,12 +31,14 @@ def test_citations_the_model_was_not_shown_are_dropped():
     llm = FakeLLM(respond=cite_a_confidential_chunk)
     result = answer_question("harbor experience?", PERSONAS["mia"],
                              SearchIndex(load_chunks(), llm), llm)
-    assert result.citations == []
-    assert result.dropped_citations == ["PRJ-2025-044@v1#1"]
+    assert result.citations == []  # the invented citation was removed...
+    assert result.dropped_citations == ["PRJ-2025-044@v1#1"]  # ...and reported
     assert any("No source" in limitation for limitation in result.limitations)
 
 
 def test_ask_endpoint_returns_cited_answer_and_rejects_unknown_personas():
+    # TestClient calls the app in-process, without a real server (like supertest in Node).
+    # `with` makes it run the startup hook (lifespan) first and the shutdown code at the end.
     with TestClient(create_app(llm=FakeLLM())) as client:
         ok = client.post("/api/ask", json={"persona_id": "mia",
                                            "question": "Who approves a bid with a high-risk flag?"})

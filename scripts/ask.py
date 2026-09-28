@@ -2,6 +2,8 @@
 
 Run from the project root:
     uv run python -m scripts.ask mia "Do we meet the mandatory requirements of tender RVA-2026-014?"
+
+It does the same as POST /api/ask, without starting the web server.
 """
 
 import sys
@@ -12,16 +14,17 @@ from app.llm import AzureOpenAILLM
 from app.qa import answer_question
 from app.retrieval import SearchIndex
 
+# sys.argv = the command-line arguments (like process.argv in Node); [0] is the script itself.
 persona_id, question = sys.argv[1], sys.argv[2]
-llm = AzureOpenAILLM(get_settings())
-index = SearchIndex(load_chunks(), llm)
+llm = AzureOpenAILLM(get_settings())  # the real Azure model, signed in with your az login
+index = SearchIndex(load_chunks(), llm)  # embeds all chunks (one model call)
 result = answer_question(question, load_personas()[persona_id], index, llm)
 
 print(f"\nANSWER\n{result.answer}\n\nCITATIONS")
 for source in result.citations:
     print(f"  - {source.title} v{source.version} > {source.section}  [{source.chunk_id}]")
 print("\nLIMITATIONS")
-for limitation in result.limitations or ["(none)"]:
+for limitation in result.limitations or ["(none)"]:  # `or`: print "(none)" if the list is empty
     print(f"  - {limitation}")
 trace = result.retrieval
 print(f"\nSEARCH  {trace.searched_chunks} chunks searched; excluded {trace.excluded_no_permission} "
