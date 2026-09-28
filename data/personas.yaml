@@ -1,0 +1,23 @@
+# SIMULATED business roles for the demo. These are NOT real sign-in accounts: in Azure, real
+# authentication (Microsoft Entra ID) happens first, and a signed-in operator then picks a persona.
+# "groups" decide which documents a persona may see; "role" decides what it may approve.
+- id: mia
+  name: Mia Keller
+  title: Bid Manager, Transportation
+  role: bid_manager
+  groups: [all, opp-river]
+- id: lukas
+  name: Lukas Brunner
+  title: Business Line Lead, Transportation
+  role: business_line_lead
+  groups: [all, opp-river]
+- id: daniel
+  name: Daniel Meier
+  title: Regional Director
+  role: regional_director
+  groups: [all, opp-river, proj-harbor]
+- id: sara
+  name: Sara Rossi
+  title: Project Engineer, Harbor project
+  role: engineer
+  groups: [all, proj-harbor]

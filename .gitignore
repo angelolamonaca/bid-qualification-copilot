@@ -1,0 +1,12 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Local configuration (no secrets in it, but it is machine-specific)
+.env
+
+# Private interview-prep material: never publish
+prep/
