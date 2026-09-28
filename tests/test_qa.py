@@ -7,6 +7,7 @@ from app.main import create_app
 from app.models import ModelAnswer
 from app.qa import answer_question
 from app.retrieval import SearchIndex
+from app.store import MemoryStore
 from tests.fakes import FakeLLM
 
 PERSONAS = load_personas()
@@ -39,7 +40,7 @@ def test_citations_the_model_was_not_shown_are_dropped():
 def test_ask_endpoint_returns_cited_answer_and_rejects_unknown_personas():
     # TestClient calls the app in-process, without a real server (like supertest in Node).
     # `with` makes it run the startup hook (lifespan) first and the shutdown code at the end.
-    with TestClient(create_app(llm=FakeLLM())) as client:
+    with TestClient(create_app(llm=FakeLLM(), store=MemoryStore())) as client:
         ok = client.post("/api/ask", json={"persona_id": "mia",
                                            "question": "Who approves a bid with a high-risk flag?"})
         assert ok.status_code == 200

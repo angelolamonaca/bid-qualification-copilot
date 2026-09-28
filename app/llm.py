@@ -13,7 +13,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from app.config import Settings
-from app.models import LLMUsage
+from app.models import LLMUsage, ToolCall, ToolTurn
 
 # Python note: a TypeVar makes `parse` generic, like `parse<T>(schema: T): T` in TypeScript.
 # If you pass the ModelAnswer class as the schema, the type checker knows you get a ModelAnswer.
@@ -40,12 +40,15 @@ def measure(model: str, input_tokens: int, output_tokens: int, started: float) -
 
 
 # Python note: a Protocol is an interface checked by shape, like a TypeScript interface. Any class
-# with these two methods "is" an LLM, with no inheritance needed. Our Azure class and the test
-# fake both fit. `...` means "no body here, this is only the signature".
+# with these methods "is" an LLM, with no inheritance needed. Our Azure class and the test fake
+# both fit. `...` means "no body here, this is only the signature".
 class LLM(Protocol):
     def embed(self, texts: list[str]) -> tuple[list[list[float]], LLMUsage]: ...
 
     def parse(self, messages: list[dict], schema: type[T]) -> tuple[T, LLMUsage]: ...
+
+    def chat_with_tools(self, messages: list[dict], tools: list[dict],
+                        reasoning_effort: str = "minimal") -> tuple[ToolTurn, LLMUsage]: ...
 
 
 class AzureOpenAILLM:
@@ -97,5 +100,27 @@ class AzureOpenAILLM:
             raise LLMError(message.refusal or "The model returned no structured output.")
         tokens = response.usage
         return message.parsed, measure(
+            self._chat_model, tokens.prompt_tokens, tokens.completion_tokens, started
+        )
+
+    def chat_with_tools(self, messages: list[dict], tools: list[dict],
+                        reasoning_effort: str = "minimal") -> tuple[ToolTurn, LLMUsage]:
+        """One research step: the model either asks us to run tools or says it's done.
+
+        The model never runs anything itself. It only returns the tool name and JSON arguments;
+        our code decides whether and how to run them (see app/workflow.py).
+        """
+        started = time.perf_counter()
+        response = self._client.chat.completions.create(
+            model=self._chat_model, messages=messages, tools=tools,
+            reasoning_effort=reasoning_effort,
+        )
+        message = response.choices[0].message
+        calls = [
+            ToolCall(id=call.id, name=call.function.name, arguments=call.function.arguments)
+            for call in message.tool_calls or []  # `or []`: no tool calls -> empty list
+        ]
+        tokens = response.usage
+        return ToolTurn(content=message.content, tool_calls=calls), measure(
             self._chat_model, tokens.prompt_tokens, tokens.completion_tokens, started
         )

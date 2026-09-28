@@ -1,23 +1,34 @@
-"""FastAPI entry point: wires configuration, the model client and the search index together.
+"""FastAPI entry point: wires configuration, model, search, storage and the workflow together.
 
 What happens on POST /api/ask:
   JSON body -> validated into AskRequest -> look up the simulated persona -> answer_question()
   -> AnswerResult, which FastAPI validates again and sends back as JSON.
+
+The bid workflow (Step 4) has one endpoint per step:
+  POST /api/bids                      research + assess a tender        (bid manager)
+  POST /api/bids/{run_id}/inputs      answer questions, e.g. the fee    (bid manager)
+  POST /api/bids/{run_id}/decision    approve or reject                 (authorized approver)
+  POST /api/bids/{run_id}/submit      one-time write to the (mock) CRM  (bid manager)
 """
 
 from contextlib import asynccontextmanager
+from typing import Literal
 
 import openai
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app import mock_crm
 from app.config import get_settings
+from app.crm_client import CrmClient
 from app.documents import load_chunks, load_personas
 from app.llm import LLM, AzureOpenAILLM, LLMError
-from app.models import AnswerResult, Persona
+from app.models import AnswerResult, BidInputs, BidRun, Persona
 from app.qa import answer_question
 from app.retrieval import SearchIndex
+from app.store import Store, make_store
+from app.workflow import BidWorkflow, WorkflowError
 
 
 class AskRequest(BaseModel):
@@ -32,8 +43,31 @@ class AskRequest(BaseModel):
     )
 
 
-def create_app(llm: LLM | None = None) -> FastAPI:
-    """Build the app. Tests pass a fake model; normally the Azure OpenAI client is used.
+class StartBid(BaseModel):
+    persona_id: str = Field(examples=["mia"])
+    tender_doc_id: str = Field(default="TENDER-RVA-2026-014")
+
+
+class UpdateBid(BaseModel):
+    persona_id: str = Field(examples=["mia"])
+    estimated_fee_chf: int | None = Field(default=None, gt=0, examples=[180000])
+    recommendation: Literal["GO", "NO-GO"] | None = None
+
+
+class DecideBid(BaseModel):
+    persona_id: str = Field(examples=["daniel"])
+    payload_hash: str  # the fingerprint of the registration the approver actually reviewed
+    decision: Literal["approve", "reject"]
+    comment: str = ""
+
+
+class SubmitBid(BaseModel):
+    persona_id: str = Field(examples=["mia"])
+    simulate_crm_timeout: bool = False  # demo: the CRM saves, but the response is "lost"
+
+
+def create_app(llm: LLM | None = None, store: Store | None = None) -> FastAPI:
+    """Build the app. Tests pass a fake model and in-memory storage; normally Azure is used.
 
     A factory function (instead of a single global app) lets every test build a fresh app with
     its own fake dependencies.
@@ -44,14 +78,21 @@ def create_app(llm: LLM | None = None) -> FastAPI:
     # shutdown.
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        settings = get_settings()
         # `app.state` holds objects shared by all requests (like app.locals in Express).
         # `llm or AzureOpenAILLM(...)` = use the fake if a test passed one, else the real client.
-        app.state.llm = llm or AzureOpenAILLM(get_settings())
+        app.state.llm = llm or AzureOpenAILLM(settings)
+        app.state.store = store or make_store(settings)
         app.state.personas = load_personas()
         app.state.index = SearchIndex(load_chunks(), app.state.llm)  # embeds all chunks once
+        app.state.workflow = BidWorkflow(
+            app.state.store, app.state.index, app.state.llm, app.state.personas,
+            CrmClient(settings.crm_base_url),  # the CRM is reached over HTTP, like a real one
+        )
         yield
 
-    app = FastAPI(title="Bid Qualification Copilot", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Bid Qualification Copilot", version="0.2.0", lifespan=lifespan)
+    app.include_router(mock_crm.router)  # the MOCK CRM's endpoints under /mock-crm
 
     # Exception handlers turn an error raised anywhere during a request into a clean HTTP answer
     # (similar to an Express error middleware).
@@ -64,6 +105,16 @@ def create_app(llm: LLM | None = None) -> FastAPI:
     @app.exception_handler(LLMError)
     async def unusable_answer(request: Request, exc: LLMError) -> JSONResponse:
         return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+    @app.exception_handler(WorkflowError)
+    async def refused(request: Request, exc: WorkflowError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    def persona_of(request: Request, persona_id: str) -> Persona:
+        persona = request.app.state.personas.get(persona_id)  # None if the id is unknown
+        if persona is None:
+            raise HTTPException(status_code=404, detail="Unknown persona")
+        return persona
 
     # Routes. `@app.get("/health")` registers the function below as the handler for GET /health,
     # like app.get("/health", handler) in Express. The return type (-> ...) becomes the documented
@@ -81,11 +132,45 @@ def create_app(llm: LLM | None = None) -> FastAPI:
     @app.post("/api/ask")
     def ask(body: AskRequest, request: Request) -> AnswerResult:
         # `body: AskRequest` tells FastAPI to parse and validate the JSON body into an AskRequest.
-        persona = request.app.state.personas.get(body.persona_id)  # None if the id is unknown
-        if persona is None:
-            raise HTTPException(status_code=404, detail="Unknown persona")
+        persona = persona_of(request, body.persona_id)
         return answer_question(body.question, persona, request.app.state.index,
                                request.app.state.llm)
+
+    @app.post("/api/bids")
+    def start_bid(body: StartBid, request: Request) -> BidRun:
+        return request.app.state.workflow.assess(persona_of(request, body.persona_id),
+                                                 body.tender_doc_id)
+
+    @app.get("/api/bids")
+    def list_bids(request: Request) -> list[BidRun]:
+        return request.app.state.workflow.list_runs()
+
+    @app.get("/api/bids/{run_id}")  # {run_id} in the path becomes the run_id parameter
+    def get_bid(run_id: str, request: Request) -> BidRun:
+        return request.app.state.workflow.get(run_id)
+
+    @app.get("/api/bids/{run_id}/events")
+    def bid_events(run_id: str, request: Request) -> list[dict]:
+        """The audit trail: every step, tool call and decision, in order."""
+        return request.app.state.workflow.events(run_id)
+
+    @app.post("/api/bids/{run_id}/inputs")
+    def update_bid(run_id: str, body: UpdateBid, request: Request) -> BidRun:
+        inputs = BidInputs(estimated_fee_chf=body.estimated_fee_chf,
+                           recommendation=body.recommendation)
+        return request.app.state.workflow.update_inputs(
+            run_id, persona_of(request, body.persona_id), inputs)
+
+    @app.post("/api/bids/{run_id}/decision")
+    def decide_bid(run_id: str, body: DecideBid, request: Request) -> BidRun:
+        return request.app.state.workflow.decide(
+            run_id, persona_of(request, body.persona_id), body.payload_hash,
+            approve=body.decision == "approve", comment=body.comment)
+
+    @app.post("/api/bids/{run_id}/submit")
+    def submit_bid(run_id: str, body: SubmitBid, request: Request) -> BidRun:
+        return request.app.state.workflow.submit(
+            run_id, persona_of(request, body.persona_id), body.simulate_crm_timeout)
 
     return app
 
