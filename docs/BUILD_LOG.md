@@ -453,3 +453,100 @@ same key).
   - Evaluations in CI and OpenTelemetry traces.
 - **What if the model is slow or down?** Timeouts and bounded retries, then a clear 503. State
   is saved after every step, so the user can simply retry later.
+
+---
+
+## Step 5 — Web page, container image, local run with Docker Compose
+
+**Goal:** a demo anyone can follow in a browser, and ONE container image that runs locally and in
+Azure unchanged.
+
+### What I did, in plain words
+
+- **Web page** (`app/static/index.html`): plain HTML + JavaScript, no build step, served by
+  FastAPI at `/`. It walks through the five workflow steps, shows the **audit trail** and the
+  **mock CRM records**, and has a tab for plain Q&A.
+  - **Live progress:** the page picks the bid id itself and polls the audit trail every second,
+    so the agent's searches appear while it works.
+  - **Business roles are a clearly labelled "simulated role" dropdown.** The server enforces
+    every rule; the page shows every button to everyone on purpose.
+  - Every text from the server is HTML-escaped: documents are untrusted content.
+- **`/api/whoami`** shows who REALLY signed in. In Azure, Container Apps' authentication passes
+  the user in the `X-MS-CLIENT-PRINCIPAL-NAME` header. Locally there is no sign-in.
+- **Dockerfile:** `python:3.12-slim` + uv, dependencies installed from `uv.lock` in a cached
+  layer, runs as a **non-root** user. Image size: 462 MB.
+- **docker-compose.yml:** the app plus **Azurite** (the Azure Table Storage emulator) with a
+  volume, so state survives restarts.
+- **Dev-only token.** The container has no `az login` and no managed identity inside it, so
+  locally it gets a short-lived token from my login (`az account get-access-token`, valid about
+  1 hour) via an environment variable. It is never set in Azure.
+- 3 new tests: the page is served; `whoami` only reports a user when the header is present; bid
+  ids chosen by the page are validated (12 hex characters) and unique. **40 passed.**
+
+### What I saw
+
+- The container answered on `/health`, served the page, and answered a question with the real
+  model through the short-lived token.
+- The full demo ran in the browser: live searches, fee question, Lukas refused, Daniel approved,
+  simulated lost response, 1 CRM record.
+- **Restart test passed.** After `docker compose restart app`, the bid was still there, because
+  the state lives in the emulator's storage, not in the app's memory.
+
+---
+
+## Step 6 — Deployment to Azure Container Apps with managed identity and Entra sign-in
+
+**Goal:** the same image running in Azure, signing in to everything as its own identity, with no
+secrets in configuration and real user authentication in front.
+
+### What I did, in plain words
+
+1. **`infra/setup.ps1`** (one-time):
+   - a **user-assigned managed identity** (the app's own identity)
+   - a **storage account with shared-key access disabled** (only Entra identities can use it)
+   - a **container registry** (Basic)
+   - **three role assignments** for the identity, each on one resource: `AcrPull` (registry),
+     `Storage Table Data Contributor` (storage), `Cognitive Services OpenAI User` (AI resource)
+   - a **Container Apps environment** with a Log Analytics workspace
+2. **`infra/deploy.ps1`** (every release): build the image locally, **tag it with the git
+   commit** (`f86648c`), push it, create or update the container app. The app gets 0.5 vCPU and
+   1 GiB, scales 0 to 1 replicas, and has public HTTPS ingress. Configuration is environment
+   variables only, including `AZURE_CLIENT_ID`, which tells `DefaultAzureCredential` which
+   identity to use.
+3. **Built-in authentication (Easy Auth), in the portal:** Microsoft identity provider, a new
+   app registration (single tenant), "require authentication", redirect to login.
+
+### What I saw (29 Sep 2026, ~02:10)
+
+| Check | Result |
+|---|---|
+| Revision | `bid-copilot--xzrdr0b` running image `bid-copilot:f86648c` |
+| Authentication | Enabled; unauthenticated visitors are redirected to the Microsoft login |
+| Page header | "Signed in: <my account> (Microsoft Entra ID)": real identity, separate from the simulated roles |
+| Storage key access | `false`: the app reaches Table Storage only through its managed identity |
+| Logs (`az containerapp logs show`) | The workflow requests in order, including a **403** when the wrong persona tried to change the fee |
+
+### Decisions and why
+
+| Decision | Why | Alternative |
+|---|---|---|
+| Azure Container Apps | Serverless containers: scale to zero, revisions, built-in authentication, no cluster to run | AKS (overkill for one app); App Service (also fine); Functions (would need restructuring) |
+| **User-assigned** identity | It exists before the app, so its permissions are granted before the first image pull; one identity for registry, storage and model | System-assigned (the app must exist first, a chicken-and-egg with the image pull) |
+| Build locally and push | ACR cloud builds are paused on free-credit subscriptions; local Docker also means the exact image I tested is the one deployed | `az containerapp up --source` |
+| Image tag = git commit | Every running revision is traceable to its code | `latest` (not traceable) |
+| Easy Auth instead of auth code in the app | The platform handles sign-in before requests reach the app; less code, fewer mistakes | MSAL in the app |
+| No Key Vault | Nothing secret to store: identity everywhere. The only secret is the sign-in app registration's client secret, which the platform stores as a Container Apps secret | Key Vault references (the next step if real secrets appear) |
+| Scale to zero | No cost when idle. The first request after idle is slow (cold start), so before a demo set `--min-replicas 1` | Always on |
+
+### Questions I might get
+
+- **How do you roll out a new version?** Run `deploy.ps1`: it creates a new revision. Container
+  Apps can split traffic between revisions for a gradual rollout or an instant rollback. Next
+  step: GitHub Actions with OIDC (no stored secrets) plus Terraform for the infrastructure.
+- **Where are the logs?** `az containerapp logs show`, or the `ContainerAppConsoleLogs_CL` table
+  in Log Analytics. Each bid also has its own audit trail in Table Storage.
+- **What does it cost?** Mostly the registry (about 0.17 USD per day). The app scales to zero
+  within the monthly free grant, and model calls cost under a cent per assessment. Check actual
+  spend in Cost Management.
+- **Who can reach it?** Only users who sign in with an account in my Entra tenant. Inside, the
+  business roles are simulated and labelled as such; the server enforces every rule.
