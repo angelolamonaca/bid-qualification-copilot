@@ -13,6 +13,7 @@ restart loses nothing and every outcome can be explained afterwards.
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -32,9 +33,10 @@ from app.models import (
 )
 from app.qa import format_sources
 from app.retrieval import SearchIndex, can_read
-from app.store import ConcurrencyError, NotFoundError, Store
+from app.store import AlreadyExistsError, ConcurrencyError, NotFoundError, Store
 
 RUNS = "bidruns"  # table holding one BidRun record per bid
+RUN_ID = re.compile(r"[0-9a-f]{12}")  # the only accepted shape for a bid id
 AUDIT = "auditlog"  # append-only log table, one partition per bid
 MAX_ROUNDS = 4  # the research agent gets at most 4 turns...
 MAX_TOOL_CALLS = 12  # ...and at most 12 searches in total: it can never loop forever
@@ -121,13 +123,24 @@ class BidWorkflow:
 
     # --- The steps, one public method each (each is one API endpoint) --------------------------
 
-    def assess(self, persona: Persona, tender_doc_id: str) -> BidRun:
-        """Step A: research the tender with the agent, then produce a checked assessment."""
+    def assess(self, persona: Persona, tender_doc_id: str, run_id: str | None = None) -> BidRun:
+        """Step A: research the tender with the agent, then produce a checked assessment.
+
+        The web page may choose the run id itself, so it can follow the audit trail live while
+        this (slow) call is still running.
+        """
         tender = self._tender_chunks(tender_doc_id)
         if not all(can_read(persona, chunk) for chunk in tender):
             raise WorkflowError(403, f"{persona.name} is not on the team for {tender_doc_id}.")
 
-        run_id = uuid4().hex[:12]  # a random, unique id for this bid
+        run_id = run_id or uuid4().hex[:12]  # a random, unique id unless the page sent one
+        if not RUN_ID.fullmatch(run_id):
+            raise WorkflowError(422, "run_id must be 12 lowercase hexadecimal characters.")
+        try:
+            self.store.get(RUNS, run_id)
+            raise WorkflowError(409, "A bid with this id already exists.")
+        except NotFoundError:
+            pass  # good: the id is free
         self._log(run_id, persona, "assessment_started", tender=tender_doc_id)
         evidence, usage = self._research(run_id, persona, tender)
         for chunk in self.index.chunks:  # add the governing policies (current versions only)
@@ -158,7 +171,10 @@ class BidWorkflow:
         )
         self._refresh(run)
         run.status = "pending_approval" if run.draft else "needs_input"
-        self.store.create(RUNS, run_id, run.model_dump())  # model_dump() = convert to a dict
+        try:
+            self.store.create(RUNS, run_id, run.model_dump())  # model_dump() = convert to a dict
+        except AlreadyExistsError as exc:  # two requests raced with the same id
+            raise WorkflowError(409, "A bid with this id already exists.") from exc
         self._log(run_id, persona, "assessment_completed",
                   recommendation=assessment.recommendation, warnings=warnings,
                   cost_usd=round(sum(u.cost_usd for u in usage), 5))

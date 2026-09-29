@@ -1,0 +1,12 @@
+# Keep the image small and free of anything private or local.
+.venv
+.git
+.env
+prep
+**/__pycache__
+.pytest_cache
+.ruff_cache
+*.code-workspace
+tests
+docs
+scripts

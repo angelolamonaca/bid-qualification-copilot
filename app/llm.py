@@ -58,7 +58,9 @@ class AzureOpenAILLM:
         # DefaultAzureCredential tries several sign-in methods in order. Laptop: it finds the
         # `az login` session. Azure Container Apps: it finds the managed identity. No keys.
         # The token provider is a function that returns a fresh access token when needed.
-        token_provider = get_bearer_token_provider(
+        # (Only for a container on a laptop: a short-lived token passed in, see config.py.
+        # `or` means the right side runs only when no such token was given.)
+        token_provider = settings.azure_openai_bearer_token or get_bearer_token_provider(
             DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
         )
         # The standard OpenAI client works against Azure's v1 endpoint. Instead of an API key we

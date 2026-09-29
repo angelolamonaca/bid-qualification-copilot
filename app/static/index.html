@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bid Qualification Copilot</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #5d6677; --line: #dfe3ea;
+    --accent: #1f5fbf; --ok: #1d7a46; --ok-bg: #e5f4ea; --bad: #b3261e; --bad-bg: #fbe9e7;
+    --warn: #8a5a00; --warn-bg: #fff4dc; --grey-bg: #eceff3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e6e9ef; --muted: #9aa3b2; --line: #2d3440;
+      --accent: #6ea8ff; --ok: #7fd6a0; --ok-bg: #173325; --bad: #ff8a80; --bad-bg: #3a1c1a;
+      --warn: #ffcf70; --warn-bg: #3a2e12; --grey-bg: #2a303b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 16px;
+           flex-wrap: wrap; padding: 16px 24px; background: var(--card);
+           border-bottom: 1px solid var(--line); }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  h3 { font-size: 14px; margin: 14px 0 6px; }
+  .sub, .meta, .hint { color: var(--muted); font-size: 13px; margin: 2px 0 0; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+  .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 24px; }
+  .tabs { display: flex; gap: 4px; padding: 0 24px; }
+  .tabs button { border: 1px solid var(--line); border-bottom: none; border-radius: 8px 8px 0 0;
+                 background: var(--grey-bg); color: var(--text); padding: 8px 14px; cursor: pointer; }
+  .tabs button.active { background: var(--card); font-weight: 600; }
+  main { padding: 0 24px 32px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 16px; margin-top: 16px; }
+  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); padding: 7px 14px;
+           background: var(--card); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.okb { background: var(--ok); border-color: var(--ok); color: #fff; }
+  button.badb { background: var(--bad); border-color: var(--bad); color: #fff; }
+  button:disabled { opacity: .5; cursor: wait; }
+  input, select, textarea { font: inherit; color: var(--text); background: var(--card);
+                            border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+  textarea { width: 100%; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-top: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  .src, code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .badge { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 12px;
+           font-weight: 600; background: var(--grey-bg); vertical-align: middle; }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.warnc { background: var(--warn-bg); color: var(--warn); }
+  .tag { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--warn);
+         background: var(--warn-bg); border-radius: 4px; padding: 1px 6px; }
+  .warn, .question { border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 14px; }
+  .warn { background: var(--warn-bg); color: var(--warn); }
+  .question { background: var(--grey-bg); }
+  .error { color: var(--bad); font-weight: 600; }
+  .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 10px 0; }
+  .row label { display: flex; flex-direction: column; font-size: 13px; color: var(--muted); gap: 4px; }
+  .events { padding-left: 18px; margin: 0; font-size: 13px; max-height: 460px; overflow: auto; }
+  .events li { margin: 4px 0; }
+  .t { color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+  .hidden { display: none; }
+  footer { color: var(--muted); font-size: 12px; padding: 0 24px 24px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Bid Qualification Copilot</h1>
+    <p class="sub">Prototype · Contoso Infrastructure (fictional) · synthetic documents · mock CRM</p>
+  </div>
+  <div id="whoami" class="chip">…</div>
+</header>
+
+<div class="bar">
+  <label>Acting as <span class="tag">simulated role</span>
+    <select id="persona"></select></label>
+  <span class="hint">Business roles are simulated for the demo. Real sign-in (Microsoft Entra ID) is
+    separate, and the server enforces every rule, whatever this page shows.</span>
+</div>
+
+<nav class="tabs">
+  <button data-tab="bid" class="active">Bid workflow</button>
+  <button data-tab="ask">Ask a question</button>
+</nav>
+
+<main>
+  <div id="tab-bid" class="grid">
+    <div>
+      <div class="card">
+        <h2>1 · Assess the tender</h2>
+        <p><b>RVA-2026-014</b>: condition inspection of 12 road bridges (River Valley Road Authority)</p>
+        <div class="row">
+          <button id="assess" class="primary">Assess tender</button>
+          <select id="runs"><option value="">Open a previous bid…</option></select>
+        </div>
+        <div id="progress" class="hidden"></div>
+      </div>
+
+      <div id="assessment-card" class="card hidden">
+        <h2>2 · Assessment <span id="reco" class="badge"></span></h2>
+        <p id="rationale"></p>
+        <div id="warnings"></div>
+        <h3>Mandatory requirements</h3>
+        <table id="reqs"></table>
+        <h3>Contract risk flags</h3>
+        <ul id="flags"></ul>
+      </div>
+
+      <div id="draft-card" class="card hidden">
+        <h2>3 · CRM registration draft <span id="status" class="badge"></span></h2>
+        <div id="questions"></div>
+        <div class="row">
+          <label>Estimated fee (CHF, excl. VAT)<input id="fee" type="number" min="1" step="1000"></label>
+          <label>Recommendation
+            <select id="rec-override"><option value="">Keep the model's</option>
+              <option>GO</option><option>NO-GO</option></select></label>
+          <button id="update">Update draft</button>
+        </div>
+        <table id="draft"></table>
+        <p id="approver" class="meta"></p>
+      </div>
+
+      <div id="decision-card" class="card hidden">
+        <h2>4 · Decision</h2>
+        <div class="row">
+          <input id="comment" placeholder="Comment (optional)" size="40">
+          <button id="approve" class="okb">Approve</button>
+          <button id="reject" class="badb">Reject</button>
+        </div>
+        <p id="decision" class="meta"></p>
+      </div>
+
+      <div id="submit-card" class="card hidden">
+        <h2>5 · Register in the CRM</h2>
+        <div class="row">
+          <label style="flex-direction: row; align-items: center; gap: 6px">
+            <input type="checkbox" id="fault"> Simulate: the CRM saves, but the response is lost</label>
+          <button id="submit" class="primary">Submit to CRM</button>
+        </div>
+        <p id="crm"></p>
+      </div>
+
+      <p id="error" class="error hidden"></p>
+    </div>
+
+    <aside>
+      <div class="card">
+        <h2>Audit trail</h2>
+        <ol id="events" class="events"><li class="meta">Start or open a bid.</li></ol>
+      </div>
+      <div class="card">
+        <h2>CRM records <span class="tag">mock</span></h2>
+        <div id="crm-records"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="tab-ask" class="hidden">
+    <div class="card">
+      <h2>Ask about company documents</h2>
+      <p class="meta">Answers use only documents the selected role may read, with sources.</p>
+      <textarea id="question" rows="3">Who must approve a bid with an estimated fee of CHF 300,000?</textarea>
+      <div class="row"><button id="ask" class="primary">Ask</button></div>
+      <div id="answer"></div>
+    </div>
+  </div>
+</main>
+
+<footer>Independent portfolio prototype built on synthetic data. Not affiliated with, and not a
+  reproduction of, any company's product or internal workflow.</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+// Every text from the server goes through esc(): documents are untrusted content.
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g,
+  (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const chf = (n) => "CHF " + Number(n).toLocaleString("de-CH");
+let run = null;  // the bid currently shown
+
+async function api(path, body) {
+  const options = body === undefined ? {} : {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+    throw new Error(`${response.status}: ${detail || response.statusText}`);
+  }
+  return data;
+}
+
+const persona = () => $("persona").value;
+const show = (id, visible = true) => $(id).classList.toggle("hidden", !visible);
+function showError(error) {
+  $("error").textContent = error ? `Refused or failed: ${error.message}` : "";
+  show("error", !!error);
+}
+
+async function init() {
+  const me = await api("/api/whoami");
+  $("whoami").textContent = me.signed_in_as
+    ? `Signed in: ${me.signed_in_as} (Microsoft Entra ID)` : `${me.env} run · no sign-in`;
+  for (const p of await api("/api/personas")) {
+    $("persona").add(new Option(`${p.name} — ${p.title}`, p.id));
+  }
+  await Promise.all([loadRuns(), refreshCrm()]);
+}
+
+async function loadRuns() {
+  const select = $("runs");
+  select.length = 1;
+  for (const r of await api("/api/bids")) {
+    select.add(new Option(`${r.created_at.slice(0, 16).replace("T", " ")} · ${r.status} · ${r.run_id}`,
+                          r.run_id));
+  }
+}
+
+async function refreshCrm() {
+  const records = await api("/mock-crm/opportunities");
+  $("crm-records").innerHTML = records.length
+    ? `<p>${records.length} record(s)</p><ul>` + records.map((r) =>
+        `<li><code>${esc(r.crm_id)}</code> ${esc(r.payload.tender_reference)} · ` +
+        `${esc(r.payload.recommendation)} · approved by ${esc(r.payload.approved_by)}</li>`).join("") + "</ul>"
+    : `<p class="meta">No records yet.</p>`;
+}
+
+function describe(e) {
+  switch (e.event) {
+    case "tool_call": return `: search <i>${esc(e.query)}</i> → ${e.results.length} sections`;
+    case "research_completed": return `: ${e.searches} searches`;
+    case "assessment_completed": return `: ${esc(e.recommendation)}, $${e.cost_usd}`;
+    case "inputs_updated": return e.estimated_fee_chf ? `: fee ${chf(e.estimated_fee_chf)}` : "";
+    case "approval_voided": return `: ${esc(e.reason)}`;
+    case "decision_refused": return `: <span class="error">${esc(e.problems.join(" "))}</span>`;
+    case "decision_recorded": return `: ${esc(e.decision)}`;
+    case "crm_registered": return `: ${esc(e.crm_id)} after ${e.attempts} attempt(s)`;
+    case "crm_failed": return `: ${esc(e.error)}`;
+    default: return "";
+  }
+}
+
+async function showEvents(runId) {
+  const events = await api(`/api/bids/${runId}/events`).catch(() => []);
+  $("events").innerHTML = events.map((e) => `<li><span class="t">${esc(e.at.slice(11, 19))}</span> ` +
+    `<b>${esc(e.actor)}</b> ${esc(e.event.replaceAll("_", " "))}${describe(e)}</li>`).join("");
+  const searches = events.filter((e) => e.event === "tool_call");
+  if (!$("progress").classList.contains("hidden")) {
+    $("progress").innerHTML = `<p class="meta">The agent is researching (about 30 s). Searches so far:</p>` +
+      `<ul>${searches.map((s) => `<li>🔎 ${esc(s.query)} → ${s.results.length} sections</li>`).join("")}</ul>`;
+  }
+}
+
+function statusBadge(status) {
+  const kind = {met: "ok", not_met: "bad", no_evidence: "warnc"}[status] || "";
+  return `<span class="badge ${kind}">${esc(status.replace("_", " "))}</span>`;
+}
+
+function render() {
+  const a = run.assessment;
+  show("assessment-card"); show("draft-card");
+  $("reco").textContent = a.recommendation;
+  $("reco").className = "badge " + (a.recommendation === "GO" ? "ok" : "bad");
+  $("rationale").textContent = a.rationale;
+  $("warnings").innerHTML = run.warnings.map((w) => `<div class="warn">⚠ ${esc(w)}</div>`).join("");
+  $("reqs").innerHTML = "<tr><th>Requirement</th><th>Status</th><th>Why</th><th>Sources</th></tr>" +
+    a.requirements.map((r) => `<tr><td><b>${esc(r.requirement_id)}</b> ${esc(r.requirement)}</td>` +
+      `<td>${statusBadge(r.status)}</td><td>${esc(r.explanation)}</td>` +
+      `<td class="src">${r.citations.map(esc).join("<br>")}</td></tr>`).join("");
+  $("flags").innerHTML = a.risk_flags.map((f) =>
+    `<li><span class="badge ${f.category.startsWith("PR") ? "bad" : "warnc"}">${esc(f.category)}</span> ` +
+    `${esc(f.clause)}: “${esc(f.quote)}”</li>`).join("") || "<li>None</li>";
+
+  $("status").textContent = run.status.replace("_", " ");
+  $("questions").innerHTML = run.questions.map((q) => `<div class="question">❓ ${esc(q)}</div>`).join("");
+  $("fee").value = run.inputs.estimated_fee_chf ?? "";
+  $("rec-override").value = run.inputs.recommendation ?? "";
+  if (run.draft) {
+    $("draft").innerHTML = Object.entries(run.draft).map(([key, value]) =>
+      `<tr><th>${esc(key.replaceAll("_", " "))}</th><td>${esc(Array.isArray(value) ? value.join(", ")
+        : key === "estimated_fee_chf" ? chf(value) : value)}</td></tr>`).join("");
+    $("approver").innerHTML = `Fingerprint <code>${esc(run.payload_hash.slice(0, 12))}</code> · ` +
+      `required approver: <b>${esc(run.required_approver_role.replaceAll("_", " "))}</b>` +
+      (run.blockers.length ? `<br><span class="error">${esc(run.blockers.join(" "))}</span>` : "");
+  } else {
+    $("draft").innerHTML = "";
+    $("approver").textContent = "Answer the question above to complete the draft.";
+  }
+
+  show("decision-card", !!run.draft);
+  $("decision").innerHTML = run.approval
+    ? `${esc(run.approval.decision)} by <b>${esc(run.approval.approver_name)}</b>` +
+      (run.approval.comment ? ` — “${esc(run.approval.comment)}”` : "")
+    : "Waiting for a decision by an authorized approver.";
+  show("submit-card", ["approved", "submitted"].includes(run.status));
+  $("crm").innerHTML = run.crm_record
+    ? `✅ Registered in the mock CRM as <b>${esc(run.crm_record.crm_id)}</b>` : "";
+}
+
+async function assess() {
+  showError(null);
+  // The page picks the bid id, so it can follow the audit trail while the agent works.
+  const runId = [...crypto.getRandomValues(new Uint8Array(6))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  $("assess").disabled = true;
+  ["assessment-card", "draft-card", "decision-card", "submit-card"].forEach((id) => show(id, false));
+  show("progress");
+  showEvents(runId);
+  const timer = setInterval(() => showEvents(runId), 1000);
+  try {
+    run = await api("/api/bids", {persona_id: persona(), run_id: runId});
+    render();
+    await loadRuns();
+  } catch (error) {
+    showError(error);
+  } finally {
+    clearInterval(timer);
+    show("progress", false);
+    $("assess").disabled = false;
+    await showEvents(runId);
+  }
+}
+
+async function act(path, body) {
+  showError(null);
+  try {
+    run = await api(path, body);
+    render();
+  } catch (error) {
+    showError(error);
+  }
+  await Promise.all([showEvents(run.run_id), refreshCrm(), loadRuns()]);
+}
+
+$("assess").onclick = assess;
+$("runs").onchange = async () => {
+  if (!$("runs").value) return;
+  run = await api(`/api/bids/${$("runs").value}`);
+  render();
+  await showEvents(run.run_id);
+};
+$("update").onclick = () => act(`/api/bids/${run.run_id}/inputs`, {persona_id: persona(),
+  estimated_fee_chf: $("fee").value ? Number($("fee").value) : null,
+  recommendation: $("rec-override").value || null});
+$("approve").onclick = () => act(`/api/bids/${run.run_id}/decision`, {persona_id: persona(),
+  payload_hash: run.payload_hash, decision: "approve", comment: $("comment").value});
+$("reject").onclick = () => act(`/api/bids/${run.run_id}/decision`, {persona_id: persona(),
+  payload_hash: run.payload_hash, decision: "reject", comment: $("comment").value});
+$("submit").onclick = () => act(`/api/bids/${run.run_id}/submit`, {persona_id: persona(),
+  simulate_crm_timeout: $("fault").checked});
+
+$("ask").onclick = async () => {
+  showError(null);
+  $("answer").innerHTML = `<p class="meta">Searching and answering…</p>`;
+  try {
+    const r = await api("/api/ask", {persona_id: persona(), question: $("question").value});
+    const t = r.retrieval;
+    const tokens = r.usage.reduce((sum, u) => sum + u.input_tokens + u.output_tokens, 0);
+    const cost = r.usage.reduce((sum, u) => sum + u.cost_usd, 0);
+    $("answer").innerHTML = `<p>${esc(r.answer)}</p><h3>Sources</h3><ul>` +
+      (r.citations.map((c) => `<li>${esc(c.title)} v${c.version} › ${esc(c.section)} ` +
+        `<code>${esc(c.chunk_id)}</code></li>`).join("") || "<li>None</li>") + "</ul>" +
+      (r.limitations.length ? `<h3>Limitations</h3><ul>${r.limitations.map((l) =>
+        `<li>${esc(l)}</li>`).join("")}</ul>` : "") +
+      `<p class="meta">Searched ${t.searched_chunks} sections · excluded ${t.excluded_no_permission} ` +
+      `(no permission) and ${t.excluded_superseded} (superseded) · ${tokens} tokens · $${cost.toFixed(4)}</p>`;
+  } catch (error) {
+    $("answer").innerHTML = "";
+    showError(error);
+  }
+};
+
+document.querySelectorAll(".tabs button").forEach((tab) => tab.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b === tab));
+  show("tab-bid", tab.dataset.tab === "bid");
+  show("tab-ask", tab.dataset.tab === "ask");
+});
+
+init().catch(showError);
+</script>
+</body>
+</html>

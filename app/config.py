@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     embedding_deployment: str = "text-embedding-3-small"
     llm_timeout_seconds: float = 60.0  # give up on a single model call after this long
     llm_max_retries: int = 2  # retry rate limits and server errors at most this many times
+    # DEV ONLY: a short-lived Entra token (from `az account get-access-token`) for running the
+    # container on a laptop, where neither `az login` nor a managed identity exists inside it.
+    # It expires within about an hour. Never set in Azure: the managed identity is used there.
+    azure_openai_bearer_token: str = ""
 
     # --- Workflow state ---
     # "table" = Azure Table Storage (the Azurite emulator locally), "memory" = tests only

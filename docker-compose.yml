@@ -1,0 +1,33 @@
+# Local run of the SAME image that is deployed to Azure, plus the Azure Table Storage emulator.
+#   PowerShell:  $env:AZURE_OPENAI_BEARER_TOKEN = az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv
+#                docker compose up --build
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: azurite-table --tableHost 0.0.0.0 --location /data --skipApiVersionCheck
+    volumes:
+      - azurite-data:/data # survives restarts: the local stand-in for durable cloud storage
+    ports:
+      - "10002:10002"
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - azurite
+    environment:
+      APP_ENV: local
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT} # read from .env
+      CHAT_DEPLOYMENT: gpt-5-mini
+      EMBEDDING_DEPLOYMENT: text-embedding-3-small
+      STATE_BACKEND: table
+      # Azurite's well-known public development key (not a secret); "azurite" is the service name.
+      TABLES_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+      CRM_BASE_URL: http://localhost:8000/mock-crm # the mock CRM runs inside the same app
+      # DEV ONLY: a short-lived token from your own `az login` (expires within about an hour),
+      # because the container has neither the Azure CLI nor a managed identity.
+      AZURE_OPENAI_BEARER_TOKEN: ${AZURE_OPENAI_BEARER_TOKEN}
+
+volumes:
+  azurite-data:

@@ -12,11 +12,12 @@ The bid workflow (Step 4) has one endpoint per step:
 """
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 
 import openai
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app import mock_crm
@@ -29,6 +30,8 @@ from app.qa import answer_question
 from app.retrieval import SearchIndex
 from app.store import Store, make_store
 from app.workflow import BidWorkflow, WorkflowError
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 class AskRequest(BaseModel):
@@ -46,6 +49,8 @@ class AskRequest(BaseModel):
 class StartBid(BaseModel):
     persona_id: str = Field(examples=["mia"])
     tender_doc_id: str = Field(default="TENDER-RVA-2026-014")
+    # Optional: the page picks the id so it can show the agent's searches live while it waits.
+    run_id: str | None = Field(default=None, examples=[None])
 
 
 class UpdateBid(BaseModel):
@@ -120,10 +125,26 @@ def create_app(llm: LLM | None = None, store: Store | None = None) -> FastAPI:
     # like app.get("/health", handler) in Express. The return type (-> ...) becomes the documented
     # response schema at /docs. These handlers use plain `def`, not `async def`: FastAPI then runs
     # them in a worker thread, so a slow model call doesn't block other requests.
+    @app.get("/", include_in_schema=False)
+    def page() -> FileResponse:
+        """The demo web page (plain HTML + JavaScript, no build step)."""
+        return FileResponse(STATIC_DIR / "index.html")
+
     @app.get("/health")
     def health() -> dict[str, str]:
         """Liveness check, used locally and by Azure Container Apps."""
         return {"status": "ok", "env": get_settings().app_env}
+
+    @app.get("/api/whoami")
+    def whoami(request: Request) -> dict[str, str | None]:
+        """Who REALLY signed in, as opposed to the simulated persona the demo acts as.
+
+        In Azure, Container Apps' built-in authentication signs people in with Microsoft Entra ID
+        before a request reaches the app, and passes the user's name in this header (clients
+        can't forge it while authentication is on). Locally there is no sign-in: None.
+        """
+        return {"signed_in_as": request.headers.get("x-ms-client-principal-name"),
+                "env": get_settings().app_env}
 
     @app.get("/api/personas")
     def personas(request: Request) -> list[Persona]:
@@ -139,7 +160,7 @@ def create_app(llm: LLM | None = None, store: Store | None = None) -> FastAPI:
     @app.post("/api/bids")
     def start_bid(body: StartBid, request: Request) -> BidRun:
         return request.app.state.workflow.assess(persona_of(request, body.persona_id),
-                                                 body.tender_doc_id)
+                                                 body.tender_doc_id, body.run_id)
 
     @app.get("/api/bids")
     def list_bids(request: Request) -> list[BidRun]:
